@@ -17,6 +17,13 @@ VS Code extension scaffold for developing LLVM-based tagged programs that target
 - `runtime/fsm-check.py`: assembly tag transition checker
 - `runtime/default-fsm-policy.json`: fallback FSM policy
 - `examples/hello_tagged.c`: minimal tagged sample
+- `TAGGING_PROCESS.md`: detailed tagging pipeline and design notes
+
+## Tagging internals
+
+For full technical details, read:
+
+- `TAGGING_PROCESS.md`
 
 ## Prerequisites
 
