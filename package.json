@@ -1,0 +1,119 @@
+{
+  "name": "vscode-rocket-tagged-llvm",
+  "displayName": "Rocket Tagged LLVM",
+  "description": "Build tagged RISC-V programs with LLVM and validate tag transitions against an FSM policy.",
+  "version": "0.1.0",
+  "publisher": "doranm09",
+  "license": "Apache-2.0",
+  "engines": {
+    "vscode": "^1.86.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters",
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:rocketTagged.buildCurrentFile",
+    "onCommand:rocketTagged.checkCurrentFile",
+    "onCommand:rocketTagged.buildAndCheckCurrentFile"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "rocketTagged.buildCurrentFile",
+        "title": "Rocket Tagged: Build Current File"
+      },
+      {
+        "command": "rocketTagged.checkCurrentFile",
+        "title": "Rocket Tagged: Check FSM Tags"
+      },
+      {
+        "command": "rocketTagged.buildAndCheckCurrentFile",
+        "title": "Rocket Tagged: Build + Check"
+      }
+    ],
+    "languages": [
+      {
+        "id": "tagc",
+        "aliases": [
+          "Tagged C"
+        ],
+        "extensions": [
+          ".tagc"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "tagc",
+        "scopeName": "source.tagc",
+        "path": "./syntaxes/tagc.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "Rocket Tagged LLVM",
+      "properties": {
+        "rocketTagged.llvmBinDir": {
+          "type": "string",
+          "default": "/usr/bin",
+          "description": "Directory containing clang (and optionally opt/llc)."
+        },
+        "rocketTagged.python": {
+          "type": "string",
+          "default": "python3",
+          "description": "Python executable used for the FSM checker."
+        },
+        "rocketTagged.targetTriple": {
+          "type": "string",
+          "default": "riscv64-unknown-elf",
+          "description": "LLVM target triple for Rocket binaries."
+        },
+        "rocketTagged.riscvArch": {
+          "type": "string",
+          "default": "rv64gc_zicsr_zifencei",
+          "description": "-march passed to clang."
+        },
+        "rocketTagged.riscvAbi": {
+          "type": "string",
+          "default": "lp64d",
+          "description": "-mabi passed to clang."
+        },
+        "rocketTagged.outputDir": {
+          "type": "string",
+          "default": "${workspaceFolder}/build/tagged",
+          "description": "Build output directory."
+        },
+        "rocketTagged.passPluginPath": {
+          "type": "string",
+          "default": "",
+          "description": "Optional LLVM pass plugin (.so) loaded with -fpass-plugin=..."
+        },
+        "rocketTagged.extraClangArgs": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "description": "Additional clang args appended to build commands."
+        },
+        "rocketTagged.fsmPolicyPath": {
+          "type": "string",
+          "default": "${workspaceFolder}/fsm-policy.json",
+          "description": "Path to FSM transition policy JSON."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.12",
+    "@types/vscode": "^1.86.0",
+    "typescript": "^5.5.4"
+  }
+}

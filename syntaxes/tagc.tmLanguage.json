@@ -1,0 +1,14 @@
+{
+  "scopeName": "source.tagc",
+  "name": "Tagged C",
+  "patterns": [
+    {
+      "name": "keyword.control.taggedc",
+      "match": "\\b(TAG|TAG_STATE|TAG_EDGE|TAGGED_NOP)\\b"
+    },
+    {
+      "name": "comment.line.number-sign.tagged",
+      "match": "#\\s*TAG:[A-Za-z0-9_]+"
+    }
+  ]
+}
