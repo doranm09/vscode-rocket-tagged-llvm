@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
+import { createHash } from 'crypto';
 import { spawn } from 'child_process';
 
 interface BuildOutputs {
@@ -13,6 +14,17 @@ interface SidebandOutputs {
   sidebandHexPath: string;
   sidebandJsonPath: string;
   sidebandWords: number[];
+}
+
+interface LinkOutputs {
+  elfPath: string;
+  linkerPath: string;
+}
+
+interface BundleOutputs {
+  bundleDirPath: string;
+  bundleManifestPath: string;
+  bundleZipPath?: string;
 }
 
 interface ProcessResult {
@@ -56,6 +68,14 @@ function runProcess(cmd: string, args: string[], cwd: string): Promise<ProcessRe
   });
 }
 
+function ensureWorkspaceFolder(fileUri: vscode.Uri): vscode.WorkspaceFolder {
+  const workspaceFolder = vscode.workspace.getWorkspaceFolder(fileUri);
+  if (!workspaceFolder) {
+    throw new Error('Active file must be inside a workspace folder.');
+  }
+  return workspaceFolder;
+}
+
 function resolveConfig() {
   const cfg = vscode.workspace.getConfiguration('rocketTagged');
   return {
@@ -69,16 +89,26 @@ function resolveConfig() {
     outputDir: cfg.get<string>('outputDir', '${workspaceFolder}/build/tagged'),
     passPluginPath: cfg.get<string>('passPluginPath', ''),
     extraClangArgs: cfg.get<string[]>('extraClangArgs', []),
-    fsmPolicyPath: cfg.get<string>('fsmPolicyPath', '${workspaceFolder}/fsm-policy.json')
+    fsmPolicyPath: cfg.get<string>('fsmPolicyPath', '${workspaceFolder}/fsm-policy.json'),
+    linkerPath: cfg.get<string>('linkerPath', ''),
+    linkArgs: cfg.get<string[]>('linkArgs', ['-nostdlib', '-Wl,-e,main', '-Wl,-Ttext=0x80000000']),
+    bundleOutputDir: cfg.get<string>('bundleOutputDir', '${workspaceFolder}/build/tagged/deploy'),
+    bundleCreateZip: cfg.get<boolean>('bundleCreateZip', true),
+    payloadLoadAddress: cfg.get<string>('payloadLoadAddress', '0x80000000'),
+    sidebandLoadAddress: cfg.get<string>('sidebandLoadAddress', '0x88000000')
   };
 }
 
-function ensureWorkspaceFolder(fileUri: vscode.Uri): vscode.WorkspaceFolder {
-  const workspaceFolder = vscode.workspace.getWorkspaceFolder(fileUri);
-  if (!workspaceFolder) {
-    throw new Error('Active file must be inside a workspace folder.');
-  }
-  return workspaceFolder;
+function resolvePolicyPath(context: vscode.ExtensionContext, workspaceFolder: vscode.WorkspaceFolder, cfg: ReturnType<typeof resolveConfig>): string {
+  const policyPath = expandWorkspaceVar(cfg.fsmPolicyPath, workspaceFolder);
+  const defaultPolicy = path.join(context.extensionPath, 'runtime', 'default-fsm-policy.json');
+  return fs.existsSync(policyPath) ? policyPath : defaultPolicy;
+}
+
+function sha256OfFile(filePath: string): string {
+  const hash = createHash('sha256');
+  hash.update(fs.readFileSync(filePath));
+  return hash.digest('hex');
 }
 
 async function buildCurrentFile(): Promise<BuildOutputs> {
@@ -169,15 +199,38 @@ async function extractSidebandFromObject(objPath: string): Promise<SidebandOutpu
   };
 }
 
+async function linkObjectToElf(objPath: string): Promise<LinkOutputs> {
+  const fileUri = getActiveFile();
+  const workspaceFolder = ensureWorkspaceFolder(fileUri);
+  const cfg = resolveConfig();
+
+  const outBase = objPath.replace(/\.o$/, '');
+  const elfPath = `${outBase}.elf`;
+
+  const linkerPath = cfg.linkerPath.trim().length > 0
+    ? cfg.linkerPath.trim()
+    : path.join(cfg.llvmBinDir, 'clang');
+
+  const linkerBase = path.basename(linkerPath);
+  const args: string[] = [];
+
+  if (linkerBase.includes('clang')) {
+    args.push('-target', cfg.targetTriple, '-march=' + cfg.riscvArch, '-mabi=' + cfg.riscvAbi);
+  }
+
+  args.push(objPath, ...cfg.linkArgs, '-o', elfPath);
+  await runProcess(linkerPath, args, workspaceFolder.uri.fsPath);
+
+  return { elfPath, linkerPath };
+}
+
 async function checkAsmWithFsm(context: vscode.ExtensionContext, asmPath: string): Promise<void> {
   const fileUri = getActiveFile();
   const workspaceFolder = ensureWorkspaceFolder(fileUri);
   const cfg = resolveConfig();
 
   const checkerScript = path.join(context.extensionPath, 'runtime', 'fsm-check.py');
-  const policyPath = expandWorkspaceVar(cfg.fsmPolicyPath, workspaceFolder);
-  const defaultPolicy = path.join(context.extensionPath, 'runtime', 'default-fsm-policy.json');
-  const selectedPolicy = fs.existsSync(policyPath) ? policyPath : defaultPolicy;
+  const selectedPolicy = resolvePolicyPath(context, workspaceFolder, cfg);
 
   await runProcess(
     cfg.python,
@@ -192,15 +245,90 @@ async function checkSidebandWithFsm(context: vscode.ExtensionContext, sidebandBi
   const cfg = resolveConfig();
 
   const checkerScript = path.join(context.extensionPath, 'runtime', 'fsm-check.py');
-  const policyPath = expandWorkspaceVar(cfg.fsmPolicyPath, workspaceFolder);
-  const defaultPolicy = path.join(context.extensionPath, 'runtime', 'default-fsm-policy.json');
-  const selectedPolicy = fs.existsSync(policyPath) ? policyPath : defaultPolicy;
+  const selectedPolicy = resolvePolicyPath(context, workspaceFolder, cfg);
 
   await runProcess(
     cfg.python,
     [checkerScript, '--sideband-bin', sidebandBinPath, '--policy', selectedPolicy],
     workspaceFolder.uri.fsPath
   );
+}
+
+async function packageDeploymentBundle(
+  context: vscode.ExtensionContext,
+  build: BuildOutputs,
+  sideband: SidebandOutputs,
+  link: LinkOutputs
+): Promise<BundleOutputs> {
+  const fileUri = getActiveFile();
+  const workspaceFolder = ensureWorkspaceFolder(fileUri);
+  const cfg = resolveConfig();
+
+  const baseName = path.parse(fileUri.fsPath).name;
+  const bundleRoot = expandWorkspaceVar(cfg.bundleOutputDir, workspaceFolder);
+  const bundleDirPath = path.join(bundleRoot, baseName);
+
+  fs.rmSync(bundleDirPath, { recursive: true, force: true });
+  fs.mkdirSync(bundleDirPath, { recursive: true });
+
+  const selectedPolicy = resolvePolicyPath(context, workspaceFolder, cfg);
+
+  const filesToCopy = [
+    build.asmPath,
+    build.objPath,
+    link.elfPath,
+    sideband.sidebandBinPath,
+    sideband.sidebandHexPath,
+    sideband.sidebandJsonPath,
+    selectedPolicy
+  ];
+
+  const bundledFiles: Array<{ name: string; sizeBytes: number; sha256: string }> = [];
+  for (const src of filesToCopy) {
+    const name = path.basename(src);
+    const dest = path.join(bundleDirPath, name);
+    fs.copyFileSync(src, dest);
+    bundledFiles.push({
+      name,
+      sizeBytes: fs.statSync(dest).size,
+      sha256: sha256OfFile(dest)
+    });
+  }
+
+  const bundleManifestPath = path.join(bundleDirPath, 'bundle.json');
+  const manifest = {
+    generatedAt: new Date().toISOString(),
+    sourceFile: fileUri.fsPath,
+    target: {
+      triple: cfg.targetTriple,
+      arch: cfg.riscvArch,
+      abi: cfg.riscvAbi
+    },
+    addresses: {
+      payloadLoadAddress: cfg.payloadLoadAddress,
+      sidebandLoadAddress: cfg.sidebandLoadAddress
+    },
+    linker: {
+      path: link.linkerPath,
+      args: cfg.linkArgs
+    },
+    sideband: {
+      section: cfg.sidebandSection,
+      wordCount: sideband.sidebandWords.length,
+      words: sideband.sidebandWords
+    },
+    files: bundledFiles
+  };
+  fs.writeFileSync(bundleManifestPath, JSON.stringify(manifest, null, 2) + '\n');
+
+  let bundleZipPath: string | undefined;
+  if (cfg.bundleCreateZip) {
+    bundleZipPath = `${bundleDirPath}.zip`;
+    const names = fs.readdirSync(bundleDirPath).sort();
+    await runProcess(cfg.python, ['-m', 'zipfile', '-c', bundleZipPath, ...names], bundleDirPath);
+  }
+
+  return { bundleDirPath, bundleManifestPath, bundleZipPath };
 }
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -262,12 +390,30 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   });
 
+  const packageBundleCmd = vscode.commands.registerCommand('rocketTagged.packageDeploymentCurrentFile', async () => {
+    try {
+      const outputs = await buildCurrentFile();
+      const sideband = await extractSidebandFromObject(outputs.objPath);
+      await checkSidebandWithFsm(context, sideband.sidebandBinPath);
+      const link = await linkObjectToElf(outputs.objPath);
+      const bundle = await packageDeploymentBundle(context, outputs, sideband, link);
+
+      const zipSuffix = bundle.bundleZipPath ? ` and ${bundle.bundleZipPath}` : '';
+      vscode.window.showInformationMessage(
+        `Deployment bundle ready: ${bundle.bundleDirPath}${zipSuffix}`
+      );
+    } catch (err) {
+      vscode.window.showErrorMessage(String(err));
+    }
+  });
+
   context.subscriptions.push(
     buildCmd,
     checkCmd,
     buildAndCheckCmd,
     buildSidebandCmd,
-    checkSidebandCmd
+    checkSidebandCmd,
+    packageBundleCmd
   );
 }
 

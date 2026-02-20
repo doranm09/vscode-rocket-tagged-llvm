@@ -2,7 +2,7 @@
   "name": "vscode-rocket-tagged-llvm",
   "displayName": "Rocket Tagged LLVM",
   "description": "Build tagged RISC-V programs with LLVM, emit FSM sideband traces, and validate transitions against policy.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "publisher": "doranm09",
   "license": "Apache-2.0",
   "engines": {
@@ -18,7 +18,8 @@
     "onCommand:rocketTagged.checkCurrentFile",
     "onCommand:rocketTagged.buildAndCheckCurrentFile",
     "onCommand:rocketTagged.buildSidebandCurrentFile",
-    "onCommand:rocketTagged.checkSidebandCurrentFile"
+    "onCommand:rocketTagged.checkSidebandCurrentFile",
+    "onCommand:rocketTagged.packageDeploymentCurrentFile"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -42,6 +43,10 @@
       {
         "command": "rocketTagged.checkSidebandCurrentFile",
         "title": "Rocket Tagged: Build + Check FSM Sideband"
+      },
+      {
+        "command": "rocketTagged.packageDeploymentCurrentFile",
+        "title": "Rocket Tagged: Package Deployment Bundle"
       }
     ],
     "languages": [
@@ -123,6 +128,43 @@
           "type": "string",
           "default": "${workspaceFolder}/fsm-policy.json",
           "description": "Path to FSM transition policy JSON."
+        },
+        "rocketTagged.linkerPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to linker command for ELF generation. Empty uses <llvmBinDir>/clang."
+        },
+        "rocketTagged.linkArgs": {
+          "type": "array",
+          "default": [
+            "-nostdlib",
+            "-Wl,-e,main",
+            "-Wl,-Ttext=0x80000000"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "Arguments passed to linker when producing deployment ELF."
+        },
+        "rocketTagged.bundleOutputDir": {
+          "type": "string",
+          "default": "${workspaceFolder}/build/tagged/deploy",
+          "description": "Output root for generated deployment bundles."
+        },
+        "rocketTagged.bundleCreateZip": {
+          "type": "boolean",
+          "default": true,
+          "description": "Also create a .zip archive for each deployment bundle."
+        },
+        "rocketTagged.payloadLoadAddress": {
+          "type": "string",
+          "default": "0x80000000",
+          "description": "Intended payload load address recorded in bundle manifest."
+        },
+        "rocketTagged.sidebandLoadAddress": {
+          "type": "string",
+          "default": "0x88000000",
+          "description": "Intended sideband stream load address recorded in bundle manifest."
         }
       }
     }

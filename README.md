@@ -1,29 +1,31 @@
 # vscode-rocket-tagged-llvm
 
-VS Code extension for developing tagged RISC-V programs for Rocket and producing an FSM sideband stream artifact that can be consumed by a hardware checker.
+VS Code extension for developing tagged RISC-V programs for Rocket and producing an FSM sideband stream artifact consumable by a hardware checker.
 
 ## What this gives you
 
 - `Rocket Tagged: Build Current File`
-  - Compiles active file to RISC-V assembly (`.tagged.s`) and object (`.o`) using `clang`
+  - Compiles active file to `*.tagged.s` and `*.o`
 - `Rocket Tagged: Check FSM Tags`
-  - Runs policy check on asm markers (`TAG:<STATE>`)
+  - Validates asm `TAG:<STATE>` markers against policy
 - `Rocket Tagged: Build + Check`
   - Build + asm-marker check
 - `Rocket Tagged: Build + Emit FSM Sideband`
-  - Extracts `.fsm_trace` from object and emits sideband artifacts (`.bin`, `.hex`, `.json`)
+  - Extracts `.fsm_trace` stream from object
 - `Rocket Tagged: Build + Check FSM Sideband`
-  - Build, emit sideband stream, and validate it against the FSM policy
+  - Validates extracted sideband stream against policy
+- `Rocket Tagged: Package Deployment Bundle`
+  - Build + sideband check + ELF link + deployment bundle packaging
 
 ## Repository layout
 
-- `src/extension.ts`: VS Code command logic
-- `runtime/fsm-check.py`: FSM checker for asm markers or sideband binary stream
-- `runtime/fsm_trace.h`: macros to emit hardware-consumable sideband IDs
-- `runtime/default-fsm-policy.json`: fallback FSM policy with state-to-ID mapping
+- `src/extension.ts`: VS Code commands and build/packaging orchestration
+- `runtime/fsm-check.py`: checker for asm markers or sideband binary stream
+- `runtime/fsm_trace.h`: C macros to emit sideband IDs in `.fsm_trace`
+- `runtime/default-fsm-policy.json`: fallback FSM policy with state-ID map
 - `examples/fsm_sideband_demo.c`: sideband-enabled source example
-- `examples/README.md`: runnable examples
-- `TAGGING_PROCESS.md`: detailed tagging pipeline and design notes
+- `examples/README.md`: runnable smoke tests
+- `TAGGING_PROCESS.md`: detailed architecture and workflow
 
 ## Prerequisites
 
@@ -31,7 +33,7 @@ VS Code extension for developing tagged RISC-V programs for Rocket and producing
 - Node.js 20+
 - LLVM/clang with RISC-V target support
 - Python 3
-- `objcopy` (recommended: `riscv64-unknown-elf-objcopy`)
+- `objcopy` (default configured for `riscv64-unknown-elf-objcopy`)
 
 ## Build extension locally
 
@@ -41,7 +43,7 @@ npm install
 npm run compile
 ```
 
-Open this folder in VS Code and press `F5` to launch an Extension Development Host.
+Open this folder in VS Code and press `F5` for Extension Development Host.
 
 ## Recommended workspace settings
 
@@ -54,35 +56,36 @@ Open this folder in VS Code and press `F5` to launch an Extension Development Ho
   "rocketTagged.riscvArch": "rv64gc_zicsr_zifencei",
   "rocketTagged.riscvAbi": "lp64d",
   "rocketTagged.outputDir": "${workspaceFolder}/build/tagged",
-  "rocketTagged.fsmPolicyPath": "${workspaceFolder}/fsm-policy.json"
+  "rocketTagged.fsmPolicyPath": "${workspaceFolder}/fsm-policy.json",
+  "rocketTagged.linkerPath": "",
+  "rocketTagged.linkArgs": ["-nostdlib", "-Wl,-e,main", "-Wl,-Ttext=0x80000000"],
+  "rocketTagged.bundleOutputDir": "${workspaceFolder}/build/tagged/deploy",
+  "rocketTagged.bundleCreateZip": true,
+  "rocketTagged.payloadLoadAddress": "0x80000000",
+  "rocketTagged.sidebandLoadAddress": "0x88000000"
 }
 ```
 
-## Sideband artifact outputs
+## Deployment bundle outputs
 
-For `foo.c`, sideband commands emit:
+For source `foo.c`, the package command emits:
 
-- `build/tagged/foo.fsm_trace.bin`: raw little-endian 32-bit ID stream
-- `build/tagged/foo.fsm_trace.hex`: one hex ID per line
-- `build/tagged/foo.fsm_trace.json`: manifest with parsed IDs
+- Bundle directory: `build/tagged/deploy/foo/`
+- Optional zip archive: `build/tagged/deploy/foo.zip`
 
-These are generated from the ELF section configured by `rocketTagged.sidebandSection`.
+Bundle content:
 
-## Quick checker smoke tests
+- `foo.tagged.s`
+- `foo.o`
+- `foo.elf`
+- `foo.fsm_trace.bin`
+- `foo.fsm_trace.hex`
+- `foo.fsm_trace.json`
+- policy JSON used for checking
+- `bundle.json` (manifest with addresses, hashes, sideband words)
 
-From repo root:
+Use this bundle as the handoff artifact for boot/SD integration scripts.
 
-```bash
-python3 runtime/fsm-check.py --asm examples/demo_pass.s --policy runtime/default-fsm-policy.json
-python3 runtime/fsm-check.py --asm examples/demo_fail.s --policy runtime/default-fsm-policy.json
-```
+## Smoke tests
 
-See `examples/README.md` for sideband-specific smoke tests.
-
-## Notes for custom LLVM tag pass
-
-If you have a custom LLVM pass plugin (for instrumentation/tagging), set:
-
-- `rocketTagged.passPluginPath`: absolute path to your pass `.so`
-
-The extension adds `-fpass-plugin=<path>` to `clang` invocations.
+See `examples/README.md` for asm and sideband command-line tests.

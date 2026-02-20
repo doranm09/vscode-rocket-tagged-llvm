@@ -125,6 +125,8 @@ and always requires:
   - expected outputs: `.fsm_trace.bin/.hex/.json`
 - `Rocket Tagged: Build + Check FSM Sideband`
   - builds, emits sideband, validates sideband sequence
+- `Rocket Tagged: Package Deployment Bundle`
+  - builds, validates sideband, links `*.elf`, and emits deployment bundle directory/zip
 
 ## 7) Hardware integration contract
 
@@ -138,14 +140,15 @@ Typical deployment flow:
 
 1. compile workload,
 2. extract `.fsm_trace` stream,
-3. load stream where hardware FSM checker can consume it,
-4. run workload and compare runtime behavior against trace expectations.
+3. package payload + sideband into deployment bundle,
+4. load stream where hardware FSM checker can consume it,
+5. run workload and compare runtime behavior against trace expectations.
 
-The extension currently handles steps 1-2 and local pre-checking.
+The extension currently handles steps 1-3 and local pre-checking.
 
 ## 8) Current limitations
 
-- No automatic packaging/transport of sideband stream into board boot image yet.
+- Bundle transport to board image is not automated yet (bundle is generated, integration script is external).
 - No runtime host protocol to feed sideband into Rocket checker yet.
 - No direct trace synchronization logic (PC/time alignment) in this repo yet.
 - No custom ISA encoding in this version; this path is section-based sideband.
@@ -156,6 +159,6 @@ Recommended next milestones:
 
 1. Define Rocket-side sideband ingest interface (memory mapped FIFO, DMA, or ROM init region).
 2. Define start/reset synchronization between core and FSM checker.
-3. Add extension command to bundle program + sideband for SD card or boot artifact generation.
+3. Add SD card/boot image generation command that consumes the deployment bundle.
 4. Add on-target trace capture and post-run compare command.
 5. Optionally add LLVM pass to auto-instrument tags rather than macro-based manual insertion.

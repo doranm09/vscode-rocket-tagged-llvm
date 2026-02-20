@@ -52,3 +52,16 @@ Default mapping (`runtime/default-fsm-policy.json`):
 - `INIT=2`
 - `RUN=3`
 - `HALT=4`
+
+## 4) Deployment bundle command (in VS Code)
+
+Use Command Palette:
+
+- `Rocket Tagged: Package Deployment Bundle`
+
+It emits:
+
+- `build/tagged/deploy/<source-base>/...` (bundle directory)
+- `build/tagged/deploy/<source-base>.zip` (if enabled)
+
+Bundle includes `ELF + sideband + policy + bundle.json` metadata.
