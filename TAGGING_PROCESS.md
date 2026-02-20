@@ -129,6 +129,8 @@ and always requires:
   - builds, validates sideband, links `*.elf`, and emits deployment bundle directory/zip
 - `Rocket Tagged: Package SD Card Layout`
   - builds and validates, then emits SD-card staging directory/zip with canonical payload/sideband filenames
+- `scripts/create_sd_image.py`
+  - converts SD staging directory into partitioned FAT `.img` and optional device flash
 
 ## 7) Hardware integration contract
 

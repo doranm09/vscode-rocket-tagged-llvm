@@ -114,6 +114,34 @@ Staging content includes:
 
 This is a staging layout, not a flashed card image. It is intended to be copied onto the SD boot partition or consumed by your SD imaging scripts.
 
+## SD image CLI (staging -> .img)
+
+Use:
+
+```bash
+python3 scripts/create_sd_image.py \
+  --layout-dir build/tagged/sdcard/<source-base> \
+  --output-image /tmp/<source-base>.img \
+  --size-mb 256 \
+  --force
+```
+
+Optional device flash (dangerous, requires explicit confirmation):
+
+```bash
+python3 scripts/create_sd_image.py \
+  --layout-dir build/tagged/sdcard/<source-base> \
+  --output-image /tmp/<source-base>.img \
+  --flash-device /dev/sdX \
+  --confirm-flash-device /dev/sdX \
+  --force
+```
+
+The script creates:
+
+- partitioned FAT image with staging contents in boot partition
+- `<image>.manifest.json` with copied files and hashes
+
 ## Smoke tests
 
 See `examples/README.md` for asm and sideband command-line tests.

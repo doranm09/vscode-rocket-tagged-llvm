@@ -78,3 +78,13 @@ It emits:
 - `build/tagged/sdcard/<source-base>.zip` (if enabled)
 
 This layout is ready to copy onto an SD boot partition, and includes an example boot script (`boot.cmd.txt`).
+
+To convert that staging layout into a flashable `.img` file:
+
+```bash
+python3 scripts/create_sd_image.py \
+  --layout-dir build/tagged/sdcard/<source-base> \
+  --output-image /tmp/<source-base>.img \
+  --size-mb 256 \
+  --force
+```
