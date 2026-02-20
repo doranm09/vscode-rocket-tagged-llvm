@@ -127,6 +127,8 @@ and always requires:
   - builds, emits sideband, validates sideband sequence
 - `Rocket Tagged: Package Deployment Bundle`
   - builds, validates sideband, links `*.elf`, and emits deployment bundle directory/zip
+- `Rocket Tagged: Package SD Card Layout`
+  - builds and validates, then emits SD-card staging directory/zip with canonical payload/sideband filenames
 
 ## 7) Hardware integration contract
 
@@ -144,11 +146,11 @@ Typical deployment flow:
 4. load stream where hardware FSM checker can consume it,
 5. run workload and compare runtime behavior against trace expectations.
 
-The extension currently handles steps 1-3 and local pre-checking.
+The extension currently handles steps 1-4 and local pre-checking.
 
 ## 8) Current limitations
 
-- Bundle transport to board image is not automated yet (bundle is generated, integration script is external).
+- Flashing an SD card image is not automated yet (SD staging layout is generated, flashing remains external).
 - No runtime host protocol to feed sideband into Rocket checker yet.
 - No direct trace synchronization logic (PC/time alignment) in this repo yet.
 - No custom ISA encoding in this version; this path is section-based sideband.

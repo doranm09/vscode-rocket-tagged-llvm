@@ -65,3 +65,16 @@ It emits:
 - `build/tagged/deploy/<source-base>.zip` (if enabled)
 
 Bundle includes `ELF + sideband + policy + bundle.json` metadata.
+
+## 5) SD card layout command (in VS Code)
+
+Use Command Palette:
+
+- `Rocket Tagged: Package SD Card Layout`
+
+It emits:
+
+- `build/tagged/sdcard/<source-base>/...` (staging directory)
+- `build/tagged/sdcard/<source-base>.zip` (if enabled)
+
+This layout is ready to copy onto an SD boot partition, and includes an example boot script (`boot.cmd.txt`).

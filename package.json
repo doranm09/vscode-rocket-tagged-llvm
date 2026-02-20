@@ -19,7 +19,8 @@
     "onCommand:rocketTagged.buildAndCheckCurrentFile",
     "onCommand:rocketTagged.buildSidebandCurrentFile",
     "onCommand:rocketTagged.checkSidebandCurrentFile",
-    "onCommand:rocketTagged.packageDeploymentCurrentFile"
+    "onCommand:rocketTagged.packageDeploymentCurrentFile",
+    "onCommand:rocketTagged.packageSdLayoutCurrentFile"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -47,6 +48,10 @@
       {
         "command": "rocketTagged.packageDeploymentCurrentFile",
         "title": "Rocket Tagged: Package Deployment Bundle"
+      },
+      {
+        "command": "rocketTagged.packageSdLayoutCurrentFile",
+        "title": "Rocket Tagged: Package SD Card Layout"
       }
     ],
     "languages": [
@@ -155,6 +160,41 @@
           "type": "boolean",
           "default": true,
           "description": "Also create a .zip archive for each deployment bundle."
+        },
+        "rocketTagged.sdLayoutOutputDir": {
+          "type": "string",
+          "default": "${workspaceFolder}/build/tagged/sdcard",
+          "description": "Output root for generated SD card layout staging directories."
+        },
+        "rocketTagged.sdPayloadFilename": {
+          "type": "string",
+          "default": "payload.elf",
+          "description": "Filename for payload ELF in SD card staging output."
+        },
+        "rocketTagged.sdSidebandFilename": {
+          "type": "string",
+          "default": "fsm_trace.bin",
+          "description": "Filename for FSM sideband stream in SD card staging output."
+        },
+        "rocketTagged.sdPolicyFilename": {
+          "type": "string",
+          "default": "fsm_policy.json",
+          "description": "Filename for policy JSON in SD card staging output."
+        },
+        "rocketTagged.sdManifestFilename": {
+          "type": "string",
+          "default": "fsm_bundle.json",
+          "description": "Filename for copied deployment bundle manifest in SD card staging output."
+        },
+        "rocketTagged.sdBootScriptFilename": {
+          "type": "string",
+          "default": "boot.cmd.txt",
+          "description": "Filename for generated example boot script in SD card staging output."
+        },
+        "rocketTagged.sdLayoutCreateZip": {
+          "type": "boolean",
+          "default": true,
+          "description": "Also create a .zip archive for each SD card staging layout."
         },
         "rocketTagged.payloadLoadAddress": {
           "type": "string",

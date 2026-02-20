@@ -27,6 +27,12 @@ interface BundleOutputs {
   bundleZipPath?: string;
 }
 
+interface SdLayoutOutputs {
+  sdLayoutDirPath: string;
+  sdLayoutManifestPath: string;
+  sdLayoutZipPath?: string;
+}
+
 interface ProcessResult {
   stdout: string;
   stderr: string;
@@ -94,6 +100,13 @@ function resolveConfig() {
     linkArgs: cfg.get<string[]>('linkArgs', ['-nostdlib', '-Wl,-e,main', '-Wl,-Ttext=0x80000000']),
     bundleOutputDir: cfg.get<string>('bundleOutputDir', '${workspaceFolder}/build/tagged/deploy'),
     bundleCreateZip: cfg.get<boolean>('bundleCreateZip', true),
+    sdLayoutOutputDir: cfg.get<string>('sdLayoutOutputDir', '${workspaceFolder}/build/tagged/sdcard'),
+    sdPayloadFilename: cfg.get<string>('sdPayloadFilename', 'payload.elf'),
+    sdSidebandFilename: cfg.get<string>('sdSidebandFilename', 'fsm_trace.bin'),
+    sdPolicyFilename: cfg.get<string>('sdPolicyFilename', 'fsm_policy.json'),
+    sdManifestFilename: cfg.get<string>('sdManifestFilename', 'fsm_bundle.json'),
+    sdBootScriptFilename: cfg.get<string>('sdBootScriptFilename', 'boot.cmd.txt'),
+    sdLayoutCreateZip: cfg.get<boolean>('sdLayoutCreateZip', true),
     payloadLoadAddress: cfg.get<string>('payloadLoadAddress', '0x80000000'),
     sidebandLoadAddress: cfg.get<string>('sidebandLoadAddress', '0x88000000')
   };
@@ -331,6 +344,100 @@ async function packageDeploymentBundle(
   return { bundleDirPath, bundleManifestPath, bundleZipPath };
 }
 
+async function packageSdCardLayout(
+  context: vscode.ExtensionContext,
+  sideband: SidebandOutputs,
+  link: LinkOutputs,
+  bundle: BundleOutputs
+): Promise<SdLayoutOutputs> {
+  const fileUri = getActiveFile();
+  const workspaceFolder = ensureWorkspaceFolder(fileUri);
+  const cfg = resolveConfig();
+
+  const baseName = path.parse(fileUri.fsPath).name;
+  const sdRoot = expandWorkspaceVar(cfg.sdLayoutOutputDir, workspaceFolder);
+  const sdLayoutDirPath = path.join(sdRoot, baseName);
+
+  fs.rmSync(sdLayoutDirPath, { recursive: true, force: true });
+  fs.mkdirSync(sdLayoutDirPath, { recursive: true });
+
+  const selectedPolicy = resolvePolicyPath(context, workspaceFolder, cfg);
+
+  const payloadPath = path.join(sdLayoutDirPath, cfg.sdPayloadFilename);
+  const sidebandPath = path.join(sdLayoutDirPath, cfg.sdSidebandFilename);
+  const policyPath = path.join(sdLayoutDirPath, cfg.sdPolicyFilename);
+  const bundleManifestOut = path.join(sdLayoutDirPath, cfg.sdManifestFilename);
+
+  fs.copyFileSync(link.elfPath, payloadPath);
+  fs.copyFileSync(sideband.sidebandBinPath, sidebandPath);
+  fs.copyFileSync(selectedPolicy, policyPath);
+  fs.copyFileSync(bundle.bundleManifestPath, bundleManifestOut);
+
+  const bootScriptPath = path.join(sdLayoutDirPath, cfg.sdBootScriptFilename);
+  const bootScript = [
+    '# Example U-Boot script for Rocket FSM payload bring-up',
+    `# payload load address: ${cfg.payloadLoadAddress}`,
+    `# sideband load address: ${cfg.sidebandLoadAddress}`,
+    '',
+    '# FAT partition assumed at mmc 0:1',
+    `fatload mmc 0:1 ${cfg.payloadLoadAddress} ${cfg.sdPayloadFilename}`,
+    `fatload mmc 0:1 ${cfg.sidebandLoadAddress} ${cfg.sdSidebandFilename}`,
+    '',
+    '# TODO: configure your FSM checker to consume sideband stream from sidebandLoadAddress.',
+    '# TODO: replace bootelf flow if your environment uses a different boot handoff.',
+    `bootelf ${cfg.payloadLoadAddress}`,
+    ''
+  ].join('\n');
+  fs.writeFileSync(bootScriptPath, bootScript);
+
+  const readmePath = path.join(sdLayoutDirPath, 'README.txt');
+  const readme = [
+    'SD Card Layout Staging Directory',
+    '',
+    `Source: ${fileUri.fsPath}`,
+    `Generated: ${new Date().toISOString()}`,
+    '',
+    'Files:',
+    `- ${cfg.sdPayloadFilename}: payload ELF`,
+    `- ${cfg.sdSidebandFilename}: FSM sideband stream (binary)`,
+    `- ${cfg.sdPolicyFilename}: FSM policy used for validation`,
+    `- ${cfg.sdManifestFilename}: deployment bundle manifest`,
+    `- ${cfg.sdBootScriptFilename}: example U-Boot boot script`,
+    '',
+    'Copy these files onto the SD card boot partition, then adapt boot script as needed.',
+    ''
+  ].join('\n');
+  fs.writeFileSync(readmePath, readme);
+
+  const sdLayoutManifestPath = path.join(sdLayoutDirPath, 'sd_layout_manifest.json');
+  const manifest = {
+    generatedAt: new Date().toISOString(),
+    sourceFile: fileUri.fsPath,
+    addresses: {
+      payloadLoadAddress: cfg.payloadLoadAddress,
+      sidebandLoadAddress: cfg.sidebandLoadAddress
+    },
+    files: [
+      { name: cfg.sdPayloadFilename, sha256: sha256OfFile(payloadPath), sizeBytes: fs.statSync(payloadPath).size },
+      { name: cfg.sdSidebandFilename, sha256: sha256OfFile(sidebandPath), sizeBytes: fs.statSync(sidebandPath).size },
+      { name: cfg.sdPolicyFilename, sha256: sha256OfFile(policyPath), sizeBytes: fs.statSync(policyPath).size },
+      { name: cfg.sdManifestFilename, sha256: sha256OfFile(bundleManifestOut), sizeBytes: fs.statSync(bundleManifestOut).size },
+      { name: cfg.sdBootScriptFilename, sha256: sha256OfFile(bootScriptPath), sizeBytes: fs.statSync(bootScriptPath).size },
+      { name: 'README.txt', sha256: sha256OfFile(readmePath), sizeBytes: fs.statSync(readmePath).size }
+    ]
+  };
+  fs.writeFileSync(sdLayoutManifestPath, JSON.stringify(manifest, null, 2) + '\n');
+
+  let sdLayoutZipPath: string | undefined;
+  if (cfg.sdLayoutCreateZip) {
+    sdLayoutZipPath = `${sdLayoutDirPath}.zip`;
+    const names = fs.readdirSync(sdLayoutDirPath).sort();
+    await runProcess(cfg.python, ['-m', 'zipfile', '-c', sdLayoutZipPath, ...names], sdLayoutDirPath);
+  }
+
+  return { sdLayoutDirPath, sdLayoutManifestPath, sdLayoutZipPath };
+}
+
 export function activate(context: vscode.ExtensionContext): void {
   const buildCmd = vscode.commands.registerCommand('rocketTagged.buildCurrentFile', async () => {
     try {
@@ -407,13 +514,32 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   });
 
+  const packageSdLayoutCmd = vscode.commands.registerCommand('rocketTagged.packageSdLayoutCurrentFile', async () => {
+    try {
+      const outputs = await buildCurrentFile();
+      const sideband = await extractSidebandFromObject(outputs.objPath);
+      await checkSidebandWithFsm(context, sideband.sidebandBinPath);
+      const link = await linkObjectToElf(outputs.objPath);
+      const bundle = await packageDeploymentBundle(context, outputs, sideband, link);
+      const sdLayout = await packageSdCardLayout(context, sideband, link, bundle);
+
+      const zipSuffix = sdLayout.sdLayoutZipPath ? ` and ${sdLayout.sdLayoutZipPath}` : '';
+      vscode.window.showInformationMessage(
+        `SD card layout ready: ${sdLayout.sdLayoutDirPath}${zipSuffix}`
+      );
+    } catch (err) {
+      vscode.window.showErrorMessage(String(err));
+    }
+  });
+
   context.subscriptions.push(
     buildCmd,
     checkCmd,
     buildAndCheckCmd,
     buildSidebandCmd,
     checkSidebandCmd,
-    packageBundleCmd
+    packageBundleCmd,
+    packageSdLayoutCmd
   );
 }
 

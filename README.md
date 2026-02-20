@@ -16,6 +16,8 @@ VS Code extension for developing tagged RISC-V programs for Rocket and producing
   - Validates extracted sideband stream against policy
 - `Rocket Tagged: Package Deployment Bundle`
   - Build + sideband check + ELF link + deployment bundle packaging
+- `Rocket Tagged: Package SD Card Layout`
+  - Build + sideband check + bundle + SD-card staging layout packaging
 
 ## Repository layout
 
@@ -61,6 +63,13 @@ Open this folder in VS Code and press `F5` for Extension Development Host.
   "rocketTagged.linkArgs": ["-nostdlib", "-Wl,-e,main", "-Wl,-Ttext=0x80000000"],
   "rocketTagged.bundleOutputDir": "${workspaceFolder}/build/tagged/deploy",
   "rocketTagged.bundleCreateZip": true,
+  "rocketTagged.sdLayoutOutputDir": "${workspaceFolder}/build/tagged/sdcard",
+  "rocketTagged.sdPayloadFilename": "payload.elf",
+  "rocketTagged.sdSidebandFilename": "fsm_trace.bin",
+  "rocketTagged.sdPolicyFilename": "fsm_policy.json",
+  "rocketTagged.sdManifestFilename": "fsm_bundle.json",
+  "rocketTagged.sdBootScriptFilename": "boot.cmd.txt",
+  "rocketTagged.sdLayoutCreateZip": true,
   "rocketTagged.payloadLoadAddress": "0x80000000",
   "rocketTagged.sidebandLoadAddress": "0x88000000"
 }
@@ -85,6 +94,25 @@ Bundle content:
 - `bundle.json` (manifest with addresses, hashes, sideband words)
 
 Use this bundle as the handoff artifact for boot/SD integration scripts.
+
+## SD card layout outputs
+
+For source `foo.c`, SD layout command emits:
+
+- Staging directory: `build/tagged/sdcard/foo/`
+- Optional zip archive: `build/tagged/sdcard/foo.zip`
+
+Staging content includes:
+
+- `payload.elf` (configurable name)
+- `fsm_trace.bin` (configurable name)
+- `fsm_policy.json` (configurable name)
+- `fsm_bundle.json` (copied bundle manifest)
+- `boot.cmd.txt` (example U-Boot script)
+- `README.txt`
+- `sd_layout_manifest.json` (hashes and metadata)
+
+This is a staging layout, not a flashed card image. It is intended to be copied onto the SD boot partition or consumed by your SD imaging scripts.
 
 ## Smoke tests
 
