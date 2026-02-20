@@ -4,6 +4,12 @@
     "RUN",
     "HALT"
   ],
+  "ids": {
+    "BOOT": 1,
+    "INIT": 2,
+    "RUN": 3,
+    "HALT": 4
+  },
   "transitions": {
     "BOOT": [
       "INIT"

@@ -1,296 +1,161 @@
 # Tagging Process Deep Dive
 
-This document describes the current tagging implementation in detail, including:
+This document describes the current implementation for FSM-aware Rocket software development in this extension.
 
-- how tags are authored in source code
-- how tags flow through compilation
-- how the FSM checker validates behavior
-- how the VS Code commands orchestrate build/check
-- what is intentionally not implemented yet
-- how to evolve toward a real LLVM + Rocket hardware-enforced tagging flow
+The extension now supports two validation paths:
 
-## 1) Current design goals
+- asm marker path (`TAG:<STATE>` comments)
+- hardware-facing sideband path (`.fsm_trace` section extracted to binary stream)
 
-The current implementation is a practical developer loop for early validation:
+## 1) Design intent
 
-- Keep tagging syntax simple for firmware/software developers.
-- Keep checks deterministic and easy to debug.
-- Avoid requiring custom toolchain patches to start.
-- Allow future migration to LLVM IR/MC-level instrumentation and hardware tag checks.
+The workflow is designed for incremental bring-up:
 
-The result is a **marker-based tagging workflow**:
+1. developers author FSM events in C,
+2. compiler emits normal code plus trace metadata,
+3. extension extracts sideband stream artifacts,
+4. software policy checker validates stream before deployment,
+5. the same stream format can be consumed by a hardware FSM checker.
 
-1. developer emits symbolic state tags (`TAG(STATE)`),
-2. compiler carries those markers into assembly comments,
-3. checker extracts marker sequence and validates transitions against JSON FSM policy.
+## 2) Authoring model
 
-## 2) End-to-end architecture
+### 2.1 Sideband emission macros
 
-High-level flow:
+Use `runtime/fsm_trace.h`:
 
-1. Source authoring (`examples/hello_tagged.c`)
-2. Compilation to assembly/object (`src/extension.ts`)
-3. Tag extraction + policy validation (`runtime/fsm-check.py`)
-4. VS Code command feedback (success/error)
+- `FSM_TRACE_EMIT_ID(tag_id)` emits a 32-bit word into `.fsm_trace`
+- `FSM_TAG(state_name, tag_id)` emits both:
+  - asm marker comment (`# TAG:<STATE>`)
+  - sideband trace word in `.fsm_trace`
 
-Main code paths:
+Section attributes:
 
-- Build orchestration: `src/extension.ts`
-- Checker implementation: `runtime/fsm-check.py`
-- Default policy: `runtime/default-fsm-policy.json`
-- Sample tagged program: `examples/hello_tagged.c`
+- section name: `.fsm_trace`
+- alignment: 4 bytes
+- payload unit: 32-bit little-endian integer ID
 
-## 3) Tag authoring model
+### 2.2 Example
 
-### 3.1 Marker syntax
+`examples/fsm_sideband_demo.c` emits IDs:
 
-In the sample, tags are emitted with:
+- `BOOT=1`, `INIT=2`, `RUN=3`, `HALT=4`
 
-```c
-#define TAG(name) __asm__ volatile("# TAG:" #name)
-```
+Those IDs match `runtime/default-fsm-policy.json`.
 
-This creates assembly comment lines such as:
+## 3) Build pipeline in extension
 
-```asm
-# TAG:BOOT
-# TAG:INIT
-# TAG:RUN
-```
+Primary implementation: `src/extension.ts`.
 
-### 3.2 Why comments right now
+### 3.1 Compile stage
 
-Comment markers provide:
+Each command compiles active source to:
 
-- no ISA changes,
-- no custom assembler requirements,
-- straightforward extraction with regex,
-- quick iteration while LLVM pass/hardware contract is still evolving.
+- `*.tagged.s`
+- `*.o`
 
-### 3.3 Naming constraints
+using configured `clang` target/arch/abi settings.
 
-The checker recognizes only:
+### 3.2 Sideband extraction stage
 
-- `TAG:` prefix
-- state token matching regex group `[A-Za-z0-9_]+`
+For sideband commands, extension runs:
 
-Implication:
+- `objcopy --dump-section <section>=<bin> <object>`
 
-- states like `BOOT`, `RUN_1`, `X9` are valid,
-- states containing hyphens/spaces are not currently recognized.
+Default section is `.fsm_trace`.
 
-## 4) Build pipeline details
+Generated artifacts:
 
-Build is managed in `src/extension.ts`.
+- `<base>.fsm_trace.bin` raw 32-bit ID stream
+- `<base>.fsm_trace.hex` one ID per line (`0x????????`)
+- `<base>.fsm_trace.json` parsed manifest (word count + ID list)
 
-### 4.1 Active file resolution
+## 4) Policy model
 
-The extension requires an active editor document and workspace folder:
+`runtime/default-fsm-policy.json` uses:
 
-- fails fast if no active file is open,
-- fails if file is outside workspace.
-
-### 4.2 Output naming
-
-Given `foo.c`, outputs are:
-
-- `build/tagged/foo.tagged.s`
-- `build/tagged/foo.o`
-
-`build/tagged` is configurable via `rocketTagged.outputDir`.
-
-### 4.3 Compiler invocation
-
-The extension invokes `clang` twice:
-
-1. assembly generation (`-S -o <asm>`)
-2. object generation (`-c -o <obj>`)
-
-Base arguments:
-
-- `-target <triple>`
-- `-march=<arch>`
-- `-mabi=<abi>`
-- `-ffreestanding`
-- `-fno-builtin`
-- `-O2`
-- `-g`
-- `<source-file>`
-
-Optional arguments:
-
-- `-fpass-plugin=<path>` if `rocketTagged.passPluginPath` is set
-- additional user args from `rocketTagged.extraClangArgs`
-
-### 4.4 Process execution behavior
-
-`runProcess(...)` captures stdout/stderr and throws on non-zero exit codes.
-The thrown error includes command, exit code, stdout, and stderr for diagnostics.
-
-## 5) FSM policy model
-
-Policy is JSON with keys:
-
-- `start`: required first state (optional)
-- `accept`: list of allowed final states (optional)
-- `transitions`: adjacency map from state -> allowed next states
+- `start`: required initial state
+- `accept`: allowed final states
+- `transitions`: adjacency map `state -> allowed next states`
+- `ids`: mapping `state -> numeric tag ID`
 
 Example:
 
-```json
-{
-  "start": "BOOT",
-  "accept": ["RUN", "HALT"],
-  "transitions": {
-    "BOOT": ["INIT"],
-    "INIT": ["RUN", "HALT"],
-    "RUN": ["RUN", "HALT"],
-    "HALT": []
-  }
-}
-```
+- `BOOT: 1`
+- `INIT: 2`
+- `RUN: 3`
+- `HALT: 4`
 
-Semantics:
+## 5) Checker behavior (`runtime/fsm-check.py`)
 
-- Transition validation is pairwise over observed tag sequence.
-- Any pair not present in `transitions[current]` is a violation.
-- Missing `start` disables first-state constraint.
-- Missing/empty `accept` disables final-state constraint.
+Checker accepts exactly one input mode:
 
-## 6) Checker algorithm
+- `--asm <file>`
+- `--sideband-bin <file>`
 
-The checker (`runtime/fsm-check.py`) performs:
+and always requires:
 
-1. Parse args (`--asm`, `--policy`)
-2. Validate file existence
-3. Load policy JSON
-4. Extract tags via regex `TAG:([A-Za-z0-9_]+)`
-5. Validate:
-   - non-empty tag stream
-   - first tag equals `start` (if defined)
-   - each adjacent pair is legal
-   - final tag is in `accept` (if defined)
-6. Exit:
-   - `0` on pass
-   - `1` on policy violation
-   - `2` on missing input files
+- `--policy <file>`
 
-Output on success:
+### 5.1 ASM mode
 
-- `FSM CHECK PASS`
-- `Tag trace: S0 -> S1 -> ...`
+- regex extracts `TAG:([A-Za-z0-9_]+)`
+- extracted states are validated against policy transitions
 
-Output on failure:
+### 5.2 Sideband mode
 
-- `FSM CHECK FAIL`
-- one or more bullet-style error lines
-- full tag trace for debugging
+- binary is parsed as little-endian 32-bit words
+- each ID is mapped via policy `ids`
+- mapped state sequence is validated the same way as asm mode
 
-## 7) VS Code command behavior
+### 5.3 Exit codes
 
-Commands:
+- `0`: pass
+- `1`: FSM validation failure
+- `2`: input/policy/format error
 
-- `rocketTagged.buildCurrentFile`
-- `rocketTagged.checkCurrentFile`
-- `rocketTagged.buildAndCheckCurrentFile`
+## 6) VS Code commands and expected outputs
 
-Execution pattern:
+- `Rocket Tagged: Build Current File`
+  - expected outputs: `.tagged.s`, `.o`
+- `Rocket Tagged: Check FSM Tags`
+  - validates asm markers against policy
+- `Rocket Tagged: Build + Check`
+  - same as above in one step
+- `Rocket Tagged: Build + Emit FSM Sideband`
+  - expected outputs: `.fsm_trace.bin/.hex/.json`
+- `Rocket Tagged: Build + Check FSM Sideband`
+  - builds, emits sideband, validates sideband sequence
 
-- `Build`: compile only.
-- `Check`: compile, then check assembly.
-- `Build + Check`: compile, then check assembly.
+## 7) Hardware integration contract
 
-Note: `Check` currently performs a build before checking to ensure the assembly reflects current editor state.
+Current sideband contract expected by hardware checker:
 
-## 8) Configuration contract
+- ordered stream of 32-bit tag IDs
+- little-endian word encoding
+- semantic mapping supplied by shared policy/ID table
 
-Supported settings:
+Typical deployment flow:
 
-- `rocketTagged.llvmBinDir`
-- `rocketTagged.python`
-- `rocketTagged.targetTriple`
-- `rocketTagged.riscvArch`
-- `rocketTagged.riscvAbi`
-- `rocketTagged.outputDir`
-- `rocketTagged.passPluginPath`
-- `rocketTagged.extraClangArgs`
-- `rocketTagged.fsmPolicyPath`
+1. compile workload,
+2. extract `.fsm_trace` stream,
+3. load stream where hardware FSM checker can consume it,
+4. run workload and compare runtime behavior against trace expectations.
 
-Policy resolution behavior:
+The extension currently handles steps 1-2 and local pre-checking.
 
-- If `fsmPolicyPath` exists, use it.
-- Otherwise fallback to packaged `runtime/default-fsm-policy.json`.
+## 8) Current limitations
 
-## 9) Determinism and limitations
+- No automatic packaging/transport of sideband stream into board boot image yet.
+- No runtime host protocol to feed sideband into Rocket checker yet.
+- No direct trace synchronization logic (PC/time alignment) in this repo yet.
+- No custom ISA encoding in this version; this path is section-based sideband.
 
-### 9.1 Determinism
+## 9) Next steps for full Rocket FSM enforcement
 
-Checker decisions are deterministic for identical:
+Recommended next milestones:
 
-- assembly file content
-- policy JSON
-
-No runtime nondeterminism is introduced in the checker.
-
-### 9.2 Current limitations
-
-Current version is intentionally lightweight:
-
-- Tags are comments, not architectural metadata.
-- No CFG/path-sensitive validation beyond observed linear sequence.
-- No per-instruction binary tagging.
-- No runtime handshake with Rocket core/FSM hardware.
-- No linker stage integration for cross-file tag-flow constraints.
-
-## 10) Roadmap to real LLVM + hardware tags
-
-Recommended migration path:
-
-1. Replace comment markers with explicit frontend intrinsic or annotation.
-2. Implement LLVM pass to:
-   - attach tag metadata to selected instructions/basic blocks,
-   - emit sideband section or custom pseudo-ops.
-3. Extend assembler/linker flow to preserve tag stream mapping.
-4. Define software-hardware contract:
-   - encoding format,
-   - memory/register transport path,
-   - boot-time initialization protocol.
-5. Implement Rocket-side FSM checker consuming encoded tags at runtime.
-6. Keep this plugin as developer frontend:
-   - build orchestration,
-   - local static precheck,
-   - optional on-target trace comparison.
-
-## 11) Practical usage pattern
-
-Typical iteration loop:
-
-1. Edit tagged source.
-2. Run `Rocket Tagged: Build + Check`.
-3. If fail:
-   - inspect illegal transition message,
-   - inspect tag trace,
-   - inspect policy JSON.
-4. Fix source ordering or update policy intentionally.
-5. Repeat until pass.
-
-This keeps state-machine policy drift visible during normal software development.
-
-## 12) Troubleshooting
-
-Common issues:
-
-- `clang: command not found`:
-  - set `rocketTagged.llvmBinDir` correctly.
-- `FSM CHECK FAIL: No TAG:<STATE> markers`:
-  - ensure tags are emitted and preserved in generated assembly.
-- `policy file not found`:
-  - set `rocketTagged.fsmPolicyPath` or create workspace policy file.
-- Unexpected transition failure:
-  - verify exact state spellings (case-sensitive),
-  - verify transition adjacency in JSON.
-
-## 13) Security/integrity notes
-
-Because tags are currently comment markers, this mechanism is an engineering validation tool, not a tamper-resistant enforcement system.
-Use it for development-time correctness checks until hardware-anchored tagging is implemented.
+1. Define Rocket-side sideband ingest interface (memory mapped FIFO, DMA, or ROM init region).
+2. Define start/reset synchronization between core and FSM checker.
+3. Add extension command to bundle program + sideband for SD card or boot artifact generation.
+4. Add on-target trace capture and post-run compare command.
+5. Optionally add LLVM pass to auto-instrument tags rather than macro-based manual insertion.

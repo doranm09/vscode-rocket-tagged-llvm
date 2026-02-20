@@ -8,6 +8,18 @@ interface BuildOutputs {
   objPath: string;
 }
 
+interface SidebandOutputs {
+  sidebandBinPath: string;
+  sidebandHexPath: string;
+  sidebandJsonPath: string;
+  sidebandWords: number[];
+}
+
+interface ProcessResult {
+  stdout: string;
+  stderr: string;
+}
+
 function expandWorkspaceVar(value: string, workspaceFolder: vscode.WorkspaceFolder): string {
   return value.replace('${workspaceFolder}', workspaceFolder.uri.fsPath);
 }
@@ -20,7 +32,7 @@ function getActiveFile(): vscode.Uri {
   return editor.document.uri;
 }
 
-function runProcess(cmd: string, args: string[], cwd: string): Promise<void> {
+function runProcess(cmd: string, args: string[], cwd: string): Promise<ProcessResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, args, { cwd });
     let stdout = '';
@@ -36,7 +48,7 @@ function runProcess(cmd: string, args: string[], cwd: string): Promise<void> {
     child.on('error', (err) => reject(err));
     child.on('close', (code) => {
       if (code === 0) {
-        resolve();
+        resolve({ stdout, stderr });
       } else {
         reject(new Error(`${cmd} failed (${code})\n${stdout}\n${stderr}`));
       }
@@ -48,6 +60,8 @@ function resolveConfig() {
   const cfg = vscode.workspace.getConfiguration('rocketTagged');
   return {
     llvmBinDir: cfg.get<string>('llvmBinDir', '/usr/bin'),
+    objcopyPath: cfg.get<string>('objcopyPath', 'riscv64-unknown-elf-objcopy'),
+    sidebandSection: cfg.get<string>('sidebandSection', '.fsm_trace'),
     python: cfg.get<string>('python', 'python3'),
     targetTriple: cfg.get<string>('targetTriple', 'riscv64-unknown-elf'),
     riscvArch: cfg.get<string>('riscvArch', 'rv64gc_zicsr_zifencei'),
@@ -59,13 +73,18 @@ function resolveConfig() {
   };
 }
 
-async function buildCurrentFile(context: vscode.ExtensionContext): Promise<BuildOutputs> {
-  const fileUri = getActiveFile();
-  const filePath = fileUri.fsPath;
+function ensureWorkspaceFolder(fileUri: vscode.Uri): vscode.WorkspaceFolder {
   const workspaceFolder = vscode.workspace.getWorkspaceFolder(fileUri);
   if (!workspaceFolder) {
     throw new Error('Active file must be inside a workspace folder.');
   }
+  return workspaceFolder;
+}
+
+async function buildCurrentFile(): Promise<BuildOutputs> {
+  const fileUri = getActiveFile();
+  const filePath = fileUri.fsPath;
+  const workspaceFolder = ensureWorkspaceFolder(fileUri);
 
   const cfg = resolveConfig();
   const clangPath = path.join(cfg.llvmBinDir, 'clang');
@@ -99,17 +118,64 @@ async function buildCurrentFile(context: vscode.ExtensionContext): Promise<Build
   return { asmPath, objPath };
 }
 
-async function checkAsmWithFsm(context: vscode.ExtensionContext, asmPath: string): Promise<void> {
+async function extractSidebandFromObject(objPath: string): Promise<SidebandOutputs> {
   const fileUri = getActiveFile();
-  const workspaceFolder = vscode.workspace.getWorkspaceFolder(fileUri);
-  if (!workspaceFolder) {
-    throw new Error('Active file must be inside a workspace folder.');
+  const workspaceFolder = ensureWorkspaceFolder(fileUri);
+  const cfg = resolveConfig();
+
+  const outBase = objPath.replace(/\.o$/, '');
+  const sidebandBinPath = `${outBase}.fsm_trace.bin`;
+  const sidebandHexPath = `${outBase}.fsm_trace.hex`;
+  const sidebandJsonPath = `${outBase}.fsm_trace.json`;
+
+  await runProcess(
+    cfg.objcopyPath,
+    [`--dump-section`, `${cfg.sidebandSection}=${sidebandBinPath}`, objPath],
+    workspaceFolder.uri.fsPath
+  );
+
+  if (!fs.existsSync(sidebandBinPath)) {
+    throw new Error(`Sideband extraction failed: ${sidebandBinPath} was not created.`);
   }
 
+  const raw = fs.readFileSync(sidebandBinPath);
+  if (raw.length % 4 !== 0) {
+    throw new Error(`Extracted sideband length (${raw.length}) is not 4-byte aligned.`);
+  }
+
+  const words: number[] = [];
+  for (let i = 0; i < raw.length; i += 4) {
+    words.push(raw.readUInt32LE(i));
+  }
+
+  const hexLines = words.map((w) => '0x' + w.toString(16).padStart(8, '0'));
+  fs.writeFileSync(sidebandHexPath, hexLines.join('\n') + (hexLines.length > 0 ? '\n' : ''));
+
+  const manifest = {
+    section: cfg.sidebandSection,
+    sourceObject: objPath,
+    sidebandBin: sidebandBinPath,
+    wordCount: words.length,
+    words,
+    hexWords: hexLines
+  };
+  fs.writeFileSync(sidebandJsonPath, JSON.stringify(manifest, null, 2) + '\n');
+
+  return {
+    sidebandBinPath,
+    sidebandHexPath,
+    sidebandJsonPath,
+    sidebandWords: words
+  };
+}
+
+async function checkAsmWithFsm(context: vscode.ExtensionContext, asmPath: string): Promise<void> {
+  const fileUri = getActiveFile();
+  const workspaceFolder = ensureWorkspaceFolder(fileUri);
   const cfg = resolveConfig();
+
   const checkerScript = path.join(context.extensionPath, 'runtime', 'fsm-check.py');
   const policyPath = expandWorkspaceVar(cfg.fsmPolicyPath, workspaceFolder);
-
   const defaultPolicy = path.join(context.extensionPath, 'runtime', 'default-fsm-policy.json');
   const selectedPolicy = fs.existsSync(policyPath) ? policyPath : defaultPolicy;
 
@@ -120,10 +186,27 @@ async function checkAsmWithFsm(context: vscode.ExtensionContext, asmPath: string
   );
 }
 
+async function checkSidebandWithFsm(context: vscode.ExtensionContext, sidebandBinPath: string): Promise<void> {
+  const fileUri = getActiveFile();
+  const workspaceFolder = ensureWorkspaceFolder(fileUri);
+  const cfg = resolveConfig();
+
+  const checkerScript = path.join(context.extensionPath, 'runtime', 'fsm-check.py');
+  const policyPath = expandWorkspaceVar(cfg.fsmPolicyPath, workspaceFolder);
+  const defaultPolicy = path.join(context.extensionPath, 'runtime', 'default-fsm-policy.json');
+  const selectedPolicy = fs.existsSync(policyPath) ? policyPath : defaultPolicy;
+
+  await runProcess(
+    cfg.python,
+    [checkerScript, '--sideband-bin', sidebandBinPath, '--policy', selectedPolicy],
+    workspaceFolder.uri.fsPath
+  );
+}
+
 export function activate(context: vscode.ExtensionContext): void {
   const buildCmd = vscode.commands.registerCommand('rocketTagged.buildCurrentFile', async () => {
     try {
-      const outputs = await buildCurrentFile(context);
+      const outputs = await buildCurrentFile();
       vscode.window.showInformationMessage(
         `Rocket Tagged build complete: ${outputs.asmPath} and ${outputs.objPath}`
       );
@@ -134,9 +217,9 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const checkCmd = vscode.commands.registerCommand('rocketTagged.checkCurrentFile', async () => {
     try {
-      const outputs = await buildCurrentFile(context);
+      const outputs = await buildCurrentFile();
       await checkAsmWithFsm(context, outputs.asmPath);
-      vscode.window.showInformationMessage('FSM check passed.');
+      vscode.window.showInformationMessage('FSM asm-marker check passed.');
     } catch (err) {
       vscode.window.showErrorMessage(String(err));
     }
@@ -144,17 +227,48 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const buildAndCheckCmd = vscode.commands.registerCommand('rocketTagged.buildAndCheckCurrentFile', async () => {
     try {
-      const outputs = await buildCurrentFile(context);
+      const outputs = await buildCurrentFile();
       await checkAsmWithFsm(context, outputs.asmPath);
       vscode.window.showInformationMessage(
-        `Build + FSM check passed for ${path.basename(outputs.asmPath)}`
+        `Build + asm-marker FSM check passed for ${path.basename(outputs.asmPath)}`
       );
     } catch (err) {
       vscode.window.showErrorMessage(String(err));
     }
   });
 
-  context.subscriptions.push(buildCmd, checkCmd, buildAndCheckCmd);
+  const buildSidebandCmd = vscode.commands.registerCommand('rocketTagged.buildSidebandCurrentFile', async () => {
+    try {
+      const outputs = await buildCurrentFile();
+      const sideband = await extractSidebandFromObject(outputs.objPath);
+      vscode.window.showInformationMessage(
+        `FSM sideband generated: ${sideband.sidebandBinPath} (${sideband.sidebandWords.length} tags)`
+      );
+    } catch (err) {
+      vscode.window.showErrorMessage(String(err));
+    }
+  });
+
+  const checkSidebandCmd = vscode.commands.registerCommand('rocketTagged.checkSidebandCurrentFile', async () => {
+    try {
+      const outputs = await buildCurrentFile();
+      const sideband = await extractSidebandFromObject(outputs.objPath);
+      await checkSidebandWithFsm(context, sideband.sidebandBinPath);
+      vscode.window.showInformationMessage(
+        `Build + sideband FSM check passed (${sideband.sidebandWords.length} tags).`
+      );
+    } catch (err) {
+      vscode.window.showErrorMessage(String(err));
+    }
+  });
+
+  context.subscriptions.push(
+    buildCmd,
+    checkCmd,
+    buildAndCheckCmd,
+    buildSidebandCmd,
+    checkSidebandCmd
+  );
 }
 
 export function deactivate(): void {

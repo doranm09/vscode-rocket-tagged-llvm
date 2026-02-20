@@ -1,8 +1,8 @@
 {
   "name": "vscode-rocket-tagged-llvm",
   "displayName": "Rocket Tagged LLVM",
-  "description": "Build tagged RISC-V programs with LLVM and validate tag transitions against an FSM policy.",
-  "version": "0.1.0",
+  "description": "Build tagged RISC-V programs with LLVM, emit FSM sideband traces, and validate transitions against policy.",
+  "version": "0.2.0",
   "publisher": "doranm09",
   "license": "Apache-2.0",
   "engines": {
@@ -16,7 +16,9 @@
   "activationEvents": [
     "onCommand:rocketTagged.buildCurrentFile",
     "onCommand:rocketTagged.checkCurrentFile",
-    "onCommand:rocketTagged.buildAndCheckCurrentFile"
+    "onCommand:rocketTagged.buildAndCheckCurrentFile",
+    "onCommand:rocketTagged.buildSidebandCurrentFile",
+    "onCommand:rocketTagged.checkSidebandCurrentFile"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -32,6 +34,14 @@
       {
         "command": "rocketTagged.buildAndCheckCurrentFile",
         "title": "Rocket Tagged: Build + Check"
+      },
+      {
+        "command": "rocketTagged.buildSidebandCurrentFile",
+        "title": "Rocket Tagged: Build + Emit FSM Sideband"
+      },
+      {
+        "command": "rocketTagged.checkSidebandCurrentFile",
+        "title": "Rocket Tagged: Build + Check FSM Sideband"
       }
     ],
     "languages": [
@@ -60,6 +70,16 @@
           "type": "string",
           "default": "/usr/bin",
           "description": "Directory containing clang (and optionally opt/llc)."
+        },
+        "rocketTagged.objcopyPath": {
+          "type": "string",
+          "default": "riscv64-unknown-elf-objcopy",
+          "description": "Path to objcopy used to extract sideband section from object files."
+        },
+        "rocketTagged.sidebandSection": {
+          "type": "string",
+          "default": ".fsm_trace",
+          "description": "ELF section name used for sideband FSM trace stream."
         },
         "rocketTagged.python": {
           "type": "string",

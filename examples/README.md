@@ -1,8 +1,8 @@
 # Examples
 
-This folder gives you a minimal pass/fail demo for the FSM checker.
+This folder contains both asm-marker and sideband-stream demos.
 
-## Quick checker demo (no compiler required)
+## 1) Asm marker pass/fail demo (no compiler required)
 
 From repo root:
 
@@ -16,17 +16,39 @@ Expected:
 - `demo_pass.s`: `FSM CHECK PASS`
 - `demo_fail.s`: `FSM CHECK FAIL` (illegal `BOOT -> RUN` transition)
 
-## Source-level example
+## 2) Sideband demo from C source
 
-`hello_tagged.c` shows how tags are authored in C:
+`fsm_sideband_demo.c` uses `runtime/fsm_trace.h` to emit:
 
-```c
-#define TAG(name) __asm__ volatile("# TAG:" #name)
-```
+- asm markers (`# TAG:<STATE>`) and
+- sideband IDs into `.fsm_trace`
 
-If `clang` is available, build and check:
+Compile and extract sideband:
 
 ```bash
-clang -target riscv64-unknown-elf -march=rv64gc_zicsr_zifencei -mabi=lp64d -ffreestanding -fno-builtin -O2 -S examples/hello_tagged.c -o /tmp/hello_tagged.s
-python3 runtime/fsm-check.py --asm /tmp/hello_tagged.s --policy runtime/default-fsm-policy.json
+clang -target riscv64-unknown-elf -march=rv64gc_zicsr_zifencei -mabi=lp64d -ffreestanding -fno-builtin -O2 -c examples/fsm_sideband_demo.c -o /tmp/fsm_sideband_demo.o
+riscv64-unknown-elf-objcopy --dump-section .fsm_trace=/tmp/fsm_sideband_demo.bin /tmp/fsm_sideband_demo.o
 ```
+
+Check sideband stream:
+
+```bash
+python3 runtime/fsm-check.py --sideband-bin /tmp/fsm_sideband_demo.bin --policy runtime/default-fsm-policy.json
+```
+
+Expected:
+
+- `FSM CHECK PASS`
+
+## 3) Sideband binary format
+
+- little-endian
+- 32-bit words
+- each word is a tag ID mapped by policy `ids`
+
+Default mapping (`runtime/default-fsm-policy.json`):
+
+- `BOOT=1`
+- `INIT=2`
+- `RUN=3`
+- `HALT=4`
